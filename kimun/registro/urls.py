@@ -1,0 +1,68 @@
+from django.urls import path
+
+from . import (
+    views, views_captura, views_instrumentos, views_propuestas, views_proteccion, views_registro, views_revision,
+    views_salas,
+)
+
+urlpatterns = [
+    path("", views.inicio, name="inicio"),
+    path("cursos/<int:curso_id>/", views.curso, name="curso"),
+    # Resumen del jardín para la directora (Task 12)
+    path("jardines/<int:jardin_id>/", views.jardin, name="jardin"),
+    # Registrar un suceso y ver cómo quedó ordenado (pantallas I y II de diseno-interfaz.jpg)
+    path("cursos/<int:curso_id>/registrar/", views_registro.registrar, name="registrar"),
+    path("capturas/<int:captura_id>/", views_registro.captura, name="captura"),
+    path("capturas/<int:captura_id>/estado/", views_registro.estado, name="captura_estado"),
+    path("capturas/<int:captura_id>/procesar/reintentar/", views_registro.reintentar, name="captura_reintentar_suceso"),
+    path("capturas/<int:captura_id>/contexto/", views_registro.agregar_contexto, name="captura_contexto"),
+    # Registro de capturas: nota escrita (Task 5), foto (Task 8) y audio (Task 9).
+    # Las fotos y los audios no se sirven: se borran apenas se leen.
+    path("cursos/<int:curso_id>/capturar/", views_captura.capturar, name="capturar"),
+    path("cursos/<int:curso_id>/capturar/foto/", views_captura.capturar_foto, name="capturar_foto"),
+    path("cursos/<int:curso_id>/capturar/audio/", views_captura.capturar_audio, name="capturar_audio"),
+    path("cursos/<int:curso_id>/capturar/recientes/", views_captura.capturas_recientes, name="capturas_recientes"),
+    path("capturas/<int:captura_id>/reintentar/", views_captura.reintentar_captura, name="captura_reintentar"),
+    path("cursos/<int:curso_id>/metas/", views.metas, name="metas"),
+    path("ninos/<int:nino_id>/", views.ficha, name="ficha"),
+    path("ninos/<int:nino_id>/trayectoria/", views.trayectoria, name="trayectoria"),
+    # Informe imprimible para la familia: solo la educadora del curso.
+    path("ninos/<int:nino_id>/informe/", views.informe_familia, name="informe_familia"),
+    path("ninos/<int:nino_id>/nucleos/<str:sigla>/nivel/", views.fijar_nivel, name="fijar_nivel"),
+    path("ninos/<int:nino_id>/nucleos/<str:sigla>/propuesta/", views_propuestas.solicitar_propuesta, name="solicitar_propuesta"),
+    path("propuestas/<int:propuesta_id>/reintentar/", views_propuestas.reintentar_propuesta, name="reintentar_propuesta"),
+    path("ninos/<int:nino_id>/nucleos/<str:sigla>/propuesta/estado/", views_propuestas.estado_propuesta, name="estado_propuesta"),
+    path("propuestas/<int:propuesta_id>/aceptar/", views_propuestas.aceptar_propuesta, name="aceptar_propuesta"),
+    path("propuestas/<int:propuesta_id>/ajustar/", views_propuestas.ajustar_propuesta, name="ajustar_propuesta"),
+    path("propuestas/<int:propuesta_id>/rechazar/", views_propuestas.rechazar_propuesta, name="rechazar_propuesta"),
+    # Revisión de observaciones (Task 6)
+    path("cursos/<int:curso_id>/revision/", views_revision.revision, name="revision"),
+    path("observaciones/<int:obs_id>/", views_revision.observacion, name="observacion"),
+    path("observaciones/<int:obs_id>/editar/", views_revision.editar, name="observacion_editar"),
+    path("observaciones/<int:obs_id>/asignar/", views_revision.asignar, name="observacion_asignar"),
+    path("observaciones/<int:obs_id>/aceptar/", views_revision.aceptar_observacion, name="observacion_aceptar"),
+    path("observaciones/<int:obs_id>/descartar/", views_revision.descartar_observacion, name="observacion_descartar"),
+    path("capturas/<int:captura_id>/aceptar-todas/", views_revision.aceptar_todas_captura, name="captura_aceptar_todas"),
+    # Instrumentos estandarizados (Task 14) y correcciones con historial
+    path("ninos/<int:nino_id>/instrumentos/nuevo/", views_instrumentos.nuevo, name="instrumento_nuevo"),
+    path("ninos/<int:nino_id>/instrumentos/nuevo/<str:codigo>/", views_instrumentos.nuevo_manual, name="instrumento_manual"),
+    path("instrumentos/<int:resultado_id>/", views_instrumentos.resultado, name="resultado_instrumento"),
+    path("instrumentos/<int:resultado_id>/estado/", views_instrumentos.estado, name="resultado_instrumento_estado"),
+    path("instrumentos/<int:resultado_id>/editar/", views_instrumentos.editar, name="resultado_instrumento_editar"),
+    path("instrumentos/<int:resultado_id>/descartar/", views_instrumentos.descartar, name="resultado_instrumento_descartar"),
+    path("instrumentos/<int:resultado_id>/reintentar/", views_instrumentos.reintentar, name="resultado_instrumento_reintentar"),
+    path("observaciones/<int:obs_id>/corregir/", views_instrumentos.corregir_observacion, name="observacion_corregir"),
+    path("observaciones/<int:obs_id>/retirar/", views_instrumentos.retirar_observacion, name="observacion_retirar"),
+    path("observaciones/<int:obs_id>/historial/", views_instrumentos.historial_observacion, name="observacion_historial"),
+    # Avisos ante posibles vulneraciones de derechos (Task 13)
+    path("avisos/", views_proteccion.avisos, name="avisos"),
+    path("avisos/<int:aviso_id>/", views_proteccion.aviso, name="aviso"),
+    path("avisos/<int:aviso_id>/resolver/", views_proteccion.resolver_aviso, name="aviso_resolver"),
+    path("jardines/<int:jardin_id>/protocolo/", views_proteccion.protocolo_jardin, name="protocolo_jardin"),
+    # Salas del jardín: la directora las crea y les asigna el equipo; ella y la educadora mantienen la lista de niños.
+    path("jardines/<int:jardin_id>/salas/nueva/", views_salas.sala_nueva, name="sala_nueva"),
+    path("cursos/<int:curso_id>/editar/", views_salas.sala_editar, name="sala_editar"),
+    path("cursos/<int:curso_id>/ninos/", views_salas.ninos_sala, name="ninos_sala"),
+    path("cursos/<int:curso_id>/ninos/nuevo/", views_salas.nino_nuevo, name="nino_nuevo"),
+    path("ninos/<int:nino_id>/editar/", views_salas.nino_editar, name="nino_editar"),
+]

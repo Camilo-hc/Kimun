@@ -1,0 +1,272 @@
+"""Vistas de la app. Toda consulta de un curso o niño pasa por `permisos.py`.
+
+- `curso`: tabla del curso con nivel esperado, brechas, distribución y quincena (Task 2), y cuántas veces
+  se observa a cada niño frente al curso (`frecuencia.py`).
+- `jardin`: resumen del jardín para la directora, que compara salas del mismo nivel educativo (Task 12).
+- `ficha`, `fijar_nivel` y `metas`: ficha del niño, validación manual y tabla de metas (Task 3).
+  La ficha es también el perfil de la pantalla IV de diseno-interfaz.jpg.
+- `inicio` lleva a "¿Qué quieres registrar?", que está en `views_registro.py` con la captura.
+- La revisión de observaciones (Task 6) está en `views_revision.py`.
+"""
+from datetime import date
+
+from django.contrib import messages
+from django.contrib.auth.decorators import login_required
+from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
+from django.utils import timezone
+from django.views.decorators.http import require_http_methods, require_POST
+
+from django.db import transaction
+
+from .alertas import DIAS_DATOS_RECIENTES, resumen_del_jardin, semestre_de_permanencia, tabla_del_curso
+from .cobertura import cobertura_quincena_del_curso, quincena_de
+from .ficha import armar_ficha, descriptores_del_nucleo
+from .informe import armar_informe
+from .frecuencia import frecuencia_del_curso
+from .forms import SEMESTRES_CON_META, FijarNivelForm, MetasForm, TrayectoriaForm, etiqueta_nivel, nombres_comunes
+from .historial import entradas, instantanea, registrar
+from .models import DescriptorNivel, Nino, Nucleo, RegistroCambio, Rubrica, Semestre, texto_nivel
+from .permisos import (
+    cursos_de,
+    cursos_donde_registra,
+    cursos_que_valida,
+    jardines_que_dirige,
+    ninos_de,
+    ninos_que_valida,
+    puede_editar_lista,
+    puede_validar,
+)
+from .pantallas import (
+    DIAS_HISTORIAL_RECIENTE,
+    historial_del_nino,
+    historial_reciente,
+    propuestas_por_decidir,
+    texto_edad,
+)
+from .radar import radar_de_la_ficha
+from .salas import panel_del_jardin
+from .revision import resumen_pendientes
+from .views_instrumentos import resultados_de_la_ficha
+
+
+def _es_htmx(request):
+    return request.headers.get("HX-Request") == "true"
+
+
+@login_required
+def inicio(request):
+    """La pestaña de inicio es "¿Qué quieres registrar?" (diseno-interfaz.jpg, pantalla I).
+
+    La directora de un jardín va al resumen de su jardín (Task 12); si dirige
+    más de uno, ve el inicio con un enlace a cada resumen. Quien registra en un
+    solo curso (la educadora o una asistente) va directo a registrar. Quien solo
+    ve un curso va a su tabla.
+    """
+    jardines = list(jardines_que_dirige(request.user))
+    if len(jardines) == 1:
+        return redirect("jardin", jardin_id=jardines[0].pk)
+    registra = list(cursos_donde_registra(request.user))
+    cursos = cursos_de(request.user).select_related("jardin")
+    if not jardines:
+        if len(registra) == 1:
+            return redirect("registrar", curso_id=registra[0].pk)
+        if not registra and len(cursos) == 1:
+            return redirect("curso", curso_id=cursos[0].pk)
+    return render(request, "registro/inicio.html", {
+        "cursos": cursos, "registra": {c.pk for c in registra}, "jardines": jardines,
+    })
+
+
+@login_required
+def jardin(request, jardin_id):
+    """Resumen del jardín para su directora: el estado de cada sala (`salas.panel_del_jardin`) y el
+    promedio de cada sala por núcleo con sus alertas (Task 12)."""
+    jardin = get_object_or_404(jardines_que_dirige(request.user), pk=jardin_id)
+    return render(request, "registro/jardin.html", {
+        "jardin": jardin, "panel": panel_del_jardin(jardin), "resumen": resumen_del_jardin(jardin),
+    })
+
+
+def _quincena_pedida(valor, hoy):
+    """La quincena de `?quincena=AAAA-MM-DD`, o la actual si falta, no es válida o es futura."""
+    actual = quincena_de(hoy)
+    try:
+        pedida = quincena_de(date.fromisoformat(valor or ""))
+    except ValueError:
+        return actual
+    return pedida if pedida.inicio <= actual.inicio else actual
+
+
+@login_required
+def curso(request, curso_id):
+    """Tabla del curso por núcleo: nivel actual, comparación con pares, nivel esperado y alertas (Task 2)."""
+    curso = get_object_or_404(cursos_de(request.user).select_related("jardin"), pk=curso_id)
+    hoy = timezone.localdate()
+    tabla = tabla_del_curso(curso, hoy=hoy)
+    quincena = _quincena_pedida(request.GET.get("quincena"), hoy)
+    actual = quincena_de(hoy)
+    cobertura = cobertura_quincena_del_curso(curso, quincena, nucleos=tabla.nucleos)
+    valida = puede_validar(request.user, curso)
+    return render(request, "registro/curso.html", {
+        "curso": curso,
+        "tabla": tabla,
+        "quincena": quincena,
+        "es_quincena_actual": quincena == actual,
+        "quincena_anterior": quincena.anterior() if quincena.inicio > date.min else None,
+        "quincena_siguiente": None if quincena == actual else quincena.siguiente(),
+        "cobertura_quincena": cobertura,
+        "frecuencia": frecuencia_del_curso(curso, hoy=hoy, ninos=[fila.nino for fila in tabla.filas]),
+        "nucleos_sin_observaciones": [c.nucleo for c in cobertura if c.sin_observaciones],
+        "dias_datos_recientes": DIAS_DATOS_RECIENTES,
+        "puede_validar": valida,
+        "es_directora": curso.jardin.directora_id == request.user.pk,
+        "puede_editar_lista": puede_editar_lista(request.user, curso),
+        "puede_registrar": cursos_donde_registra(request.user).filter(pk=curso.pk).exists(),
+        "pendientes_por_revisar": resumen_pendientes(curso)["individuales"] if valida else 0,
+        # Solo la educadora decide niveles: las demás no ven la bandeja.
+        "bandeja": propuestas_por_decidir(curso, tabla=tabla) if valida else None,
+    })
+
+
+def _pagina_ficha(request, nino, formularios=None, formularios_propuesta=None, errores_propuesta=None,
+                  form_trayectoria=None):
+    """Perfil del niño (diseno-interfaz.jpg, pantalla IV): gráfico por núcleo, historial y detalle por núcleo."""
+    hoy = timezone.localdate()
+    ficha = armar_ficha(nino, request.user, hoy=hoy, formularios=formularios,
+                        formularios_propuesta=formularios_propuesta, errores_propuesta=errores_propuesta)
+    radar, esperado = radar_de_la_ficha(ficha, Rubrica.nivel_maximo(nino.curso.nivel_educativo))
+    # El historial muestra la última semana; "Ver más" (?historial=todo) lo muestra completo.
+    historial = historial_del_nino(nino)
+    historial_completo = request.GET.get("historial") == "todo"
+    visibles = historial if historial_completo else historial_reciente(historial, hoy)
+    if ficha.puede_validar and form_trayectoria is None:
+        form_trayectoria = TrayectoriaForm(instance=nino, prefix="trayectoria")
+    return render(request, "registro/ficha.html", {
+        "ficha": ficha,
+        "curso": nino.curso,
+        "edad": texto_edad(nino.fecha_nacimiento, hoy),
+        "semestre": semestre_de_permanencia(
+            nino.fecha_ingreso, hoy, list(Semestre.objects.all()), nino.semestres_previos
+        ),
+        "form_trayectoria": form_trayectoria,
+        "cambios_trayectoria": list(
+            entradas(RegistroCambio.Objeto.TRAYECTORIA, nino.pk).select_related("usuario")
+        ) if ficha.puede_validar else [],
+        "radar": radar,
+        "esperado": esperado,
+        "historial": visibles,
+        "historial_completo": historial_completo,
+        "historial_ocultos": len(historial) - len(visibles),
+        "dias_historial": DIAS_HISTORIAL_RECIENTE,
+        "puede_registrar": cursos_donde_registra(request.user).filter(pk=nino.curso_id).exists(),
+        "puede_editar_lista": puede_editar_lista(request.user, nino.curso),
+        # Instrumentos estandarizados (Task 14): None si quien mira no debe verlos (asistentes).
+        "instrumentos": resultados_de_la_ficha(nino, request.user),
+        "obs_con_cambios": set(RegistroCambio.objects.filter(
+            objeto_tipo=RegistroCambio.Objeto.OBSERVACION, curso_id=nino.curso_id,
+        ).values_list("objeto_id", flat=True)),
+    })
+
+
+def _parcial_nucleo(request, nino, sigla, mensaje="", formularios=None, formularios_propuesta=None, error_propuesta=""):
+    ficha = armar_ficha(nino, request.user, formularios=formularios, formularios_propuesta=formularios_propuesta,
+                        errores_propuesta={sigla: error_propuesta})
+    contexto = {"nf": ficha.nucleo(sigla), "ficha": ficha, "mensaje": mensaje}
+    return render(request, "registro/_nucleo_ficha.html", contexto)
+
+
+@login_required
+def ficha(request, nino_id):
+    nino = get_object_or_404(ninos_de(request.user).select_related("curso__jardin"), pk=nino_id)
+    return _pagina_ficha(request, nino)
+
+
+@login_required
+def informe_familia(request, nino_id):
+    """Informe imprimible para la familia. Lo arma solo la educadora, con lo que ella validó (informe.py)."""
+    nino = get_object_or_404(ninos_que_valida(request.user).select_related("curso__jardin"), pk=nino_id)
+    hoy = timezone.localdate()
+    informe = armar_informe(armar_ficha(nino, request.user, hoy=hoy))
+    return render(request, "registro/informe_familia.html", {
+        "informe": informe, "curso": nino.curso, "hoy": hoy, "edad": texto_edad(nino.fecha_nacimiento, hoy),
+    })
+
+
+@login_required
+@require_POST
+def fijar_nivel(request, nino_id, sigla):
+    nino = get_object_or_404(ninos_que_valida(request.user).select_related("curso__jardin"), pk=nino_id)
+    nucleo = get_object_or_404(Nucleo, sigla=sigla)
+    nivel_educativo = nino.curso.nivel_educativo
+    descriptores = descriptores_del_nucleo(nivel_educativo, nucleo)
+    form = FijarNivelForm(
+        request.POST, prefix=nucleo.sigla,
+        nivel_maximo=Rubrica.nivel_maximo(nivel_educativo), descriptores=descriptores,
+    )
+    guardado = None
+    if form.is_valid():
+        guardado = form.guardar(nino, nucleo, request.user, timezone.localdate())
+
+    if guardado is None:
+        if _es_htmx(request):
+            # 200 y no 4xx: HTMX 2 no reemplaza el contenido con errores HTTP por defecto.
+            return _parcial_nucleo(request, nino, nucleo.sigla, formularios={nucleo.sigla: form})
+        return _pagina_ficha(request, nino, formularios={nucleo.sigla: form})
+
+    mensaje = f"Nivel guardado: {etiqueta_nivel(guardado.nivel, descriptores.get(guardado.nivel))}."
+    if _es_htmx(request):
+        return _parcial_nucleo(request, nino, nucleo.sigla, mensaje=mensaje)
+    messages.success(request, mensaje)
+    return redirect(f"{reverse('ficha', args=[nino.pk])}#nucleo-{nucleo.sigla}")
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def metas(request, curso_id):
+    curso = get_object_or_404(cursos_que_valida(request.user).select_related("jardin"), pk=curso_id)
+    nivel_educativo = curso.nivel_educativo
+    nivel_maximo = Rubrica.nivel_maximo(nivel_educativo)
+    nombres = nombres_comunes(DescriptorNivel.nombres_por_nucleo(nivel_educativo))
+    opciones = {"curso": curso, "nivel_maximo": nivel_maximo, "nombres": nombres}
+    if request.method == "POST":
+        form = MetasForm(request.POST, **opciones)
+        if form.is_valid() and form.guardar() is not None:
+            messages.success(request, "Metas guardadas.")
+            return redirect("curso", curso_id=curso.pk)
+    else:
+        form = MetasForm(**opciones)
+    contexto = {
+        "curso": curso, "form": form,
+        "texto_maximo": texto_nivel(nivel_maximo, nombres.get(nivel_maximo, "")),
+        "semestre_siguiente": SEMESTRES_CON_META + 1,
+    }
+    return render(request, "registro/metas.html", contexto)
+
+
+@login_required
+@require_POST
+def trayectoria(request, nino_id):
+    """Semestres que el niño cursó en otro jardín o sala cuna (solo la educadora del curso).
+
+    Se suman a su semestre de permanencia, así que cambian su nivel esperado y la señal
+    "bajo lo esperado". Cada cambio queda en el historial a prueba de adulteración (Task 14).
+    """
+    nino = get_object_or_404(ninos_que_valida(request.user).select_related("curso__jardin"), pk=nino_id)
+    antes = instantanea(Nino.objects.get(pk=nino.pk))
+    form = TrayectoriaForm(request.POST, instance=nino, prefix="trayectoria")
+    if not form.is_valid():
+        return _pagina_ficha(request, Nino.objects.select_related("curso__jardin").get(pk=nino.pk),
+                             form_trayectoria=form)
+    with transaction.atomic():
+        nino = form.save()
+        if instantanea(nino) != antes:
+            registrar(nino, RegistroCambio.Accion.EDITAR, usuario=request.user,
+                      motivo=form.cleaned_data.get("motivo", ""), antes=antes)
+    hoy = timezone.localdate()
+    semestre = semestre_de_permanencia(nino.fecha_ingreso, hoy, list(Semestre.objects.all()), nino.semestres_previos)
+    fila = next((f for f in tabla_del_curso(nino.curso, hoy=hoy).filas if f.nino.pk == nino.pk), None)
+    esperado = fila.nivel_esperado if fila else None
+    messages.success(request, f"Trayectoria guardada: está en su semestre {semestre}"
+                              + (f" y se espera el nivel {esperado}." if esperado else "."))
+    return redirect(f"{reverse('ficha', args=[nino.pk])}#trayectoria")

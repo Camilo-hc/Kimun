@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% load kimun %}
+{% block titulo %}{{ ficha.nino.nombre }}{% endblock %}
+{% block contenido %}
+{# Perfil del niño o niña (diseno-interfaz.jpg, pantalla IV): nivel en cada núcleo, historial y detalle por núcleo. #}
+<p class="volver"><a href="{% url 'curso' curso.pk %}">← {{ curso.nombre }}</a></p>
+
+<header class="perfil-cabecera">
+  <span class="avatar avatar-grande" aria-hidden="true" style="--fondo-avatar: {{ ficha.nino.nombre|color_avatar }}">{{ ficha.nino.nombre|iniciales }}</span>
+  <h1>{{ ficha.nino.nombre }}</h1>
+  <p>
+    {% if edad %}{{ edad }} · {% endif %}{{ curso.nombre }} · {{ curso.jardin.nombre }}
+    <br>Ingreso: <time datetime="{{ ficha.nino.fecha_ingreso|date:'Y-m-d' }}">{{ ficha.nino.fecha_ingreso|date:"d-m-Y" }}</time>
+    {% if semestre %}· Semestre {{ semestre }} en {{ curso.get_nivel_educativo_display }}{% if esperado %} · se espera el nivel {{ esperado }}{% endif %}{% endif %}
+    {% if ficha.nino.semestres_previos %}
+      <br><span class="procedencia">Incluye {{ ficha.nino.semestres_previos }} semestre{{ ficha.nino.semestres_previos|pluralize }} en {{ ficha.nino.procedencia|default:"otro jardín" }}</span>
+    {% endif %}
+  </p>
+  {% if form_trayectoria %}
+    <details id="trayectoria" class="trayectoria"{% if form_trayectoria.errors %} open{% endif %}>
+      <summary>¿Viene de otro jardín o sala cuna?</summary>
+      <p class="ayuda">
+        El nivel esperado se calcula con su semestre de permanencia en {{ curso.get_nivel_educativo_display }}.
+        Si ya cursó semestres de este nivel en otro jardín, súmalos aquí. Lo cursado en otro nivel
+        (por ejemplo, en sala cuna antes de nivel medio) no cuenta: cada nivel parte en el semestre 1.
+      </p>
+      <form method="post" action="{% url 'trayectoria' ficha.nino.pk %}">
+        {% csrf_token %}
+        {% for campo in form_trayectoria %}
+          <label for="{{ campo.id_for_label }}">{{ campo.label }}</label>
+          {{ campo }}
+          {% if campo.errors %}<small class="error" role="alert">{{ campo.errors|join:" " }}</small>{% endif %}
+        {% endfor %}
+        <button type="submit">Guardar trayectoria</button>
+      </form>
+      {% if cambios_trayectoria %}
+        <p class="ayuda">Cambios registrados:</p>
+        <ul class="cambios-trayectoria">
+          {% for c in cambios_trayectoria %}
+            <li><time datetime="{{ c.creado|date:'c' }}">{{ c.creado|date:"d-m-Y H:i" }}</time> · {{ c.usuario_nombre }}: {{ c.despues.semestres_previos }} semestre{{ c.despues.semestres_previos|pluralize }}{% if c.despues.procedencia %} en {{ c.despues.procedencia }}{% endif %}{% if c.motivo %} ({{ c.motivo }}){% endif %}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </details>
+  {% endif %}
+  <p class="perfil-acciones">
+    {% if puede_registrar %}<a role="button" href="{% url 'registrar' curso.pk %}">Registrar un suceso</a>{% endif %}
+    {% if ficha.puede_validar %}<a role="button" class="secondary outline" href="{% url 'informe_familia' ficha.nino.pk %}">Informe para la familia</a>{% endif %}
+    {% if ficha.puede_validar %}<a role="button" class="secondary outline" href="{% url 'metas' curso.pk %}">Editar metas del curso</a>{% endif %}
+    {% if puede_editar_lista %}<a role="button" class="secondary outline" href="{% url 'nino_editar' ficha.nino.pk %}">Editar sus datos</a>{% endif %}
+  </p>
+</header>
+
+<section class="perfil-seccion seccion-niveles" aria-labelledby="titulo-habilidades" data-niveles>
+  <h2 id="titulo-habilidades">Nivel en cada núcleo ({{ ficha.nucleos|length }})</h2>
+  <p class="nivel-general-ficha">
+    <span class="nivel-general-rotulo">Nivel general</span>
+    <strong class="nivel-general-numero">{{ ficha.texto_nivel_general }}</strong>
+    <span class="etiqueta-referencia">referencia</span>
+    <small class="ayuda">Promedio de sus núcleos. El nivel se decide en cada núcleo.</small>
+  </p>
+  <div class="niveles-cuerpo">
+    {% if radar %}
+      {# kimun.js usa data-siglas (en el orden de los pétalos) para pintar cada pétalo del color de su núcleo y data-esperado para marcar el núcleo más bajo. #}
+      <figure class="radar-figura" data-flor data-esperado="{{ esperado|default_if_none:'' }}" data-siglas="{% for nf in ficha.nucleos %}{{ nf.nucleo.sigla }}{% if not forloop.last %} {% endif %}{% endfor %}">
+        {{ radar }}
+        <figcaption>
+          <span class="leyenda leyenda-nino">Cada pétalo es un núcleo: más largo, más alto el nivel de {{ ficha.nino.nombre.split.0 }}</span>
+          <span class="leyenda leyenda-escala">Cada anillo es un nivel de la rúbrica, del centro hacia afuera</span>
+          <span class="leyenda leyenda-mediana">Mediana del curso</span>
+          {% if esperado %}<span class="leyenda leyenda-esperado">Nivel esperado ({{ esperado }})</span>{% endif %}
+        </figcaption>
+      </figure>
+    {% endif %}
+    <nav aria-label="Núcleos">
+      <table class="tabla-niveles">
+        <caption>Resumen por núcleo</caption>
+        <thead>
+          <tr><th scope="col">Núcleo</th><th scope="col">Nivel actual</th><th scope="col">Mediana del curso</th></tr>
+        </thead>
+        <tbody>
+          {% for nf in ficha.nucleos %}
+            <tr class="nucleo-{{ nf.nucleo.sigla }}" data-sigla="{{ nf.nucleo.sigla }}">
+              <th scope="row"><a href="#nucleo-{{ nf.nucleo.sigla }}" data-abrir-detalle="{{ nf.nucleo.sigla }}">{% with icono=nf.nucleo.sigla|icono_nucleo %}{% if icono %}<span class="icono-nucleo" aria-hidden="true" style="-webkit-mask-image: url('{{ icono }}'); mask-image: url('{{ icono }}')"></span>{% endif %}{% endwith %}{{ nf.nucleo.nombre }}</a></th>
+              <td>
+                <span class="nivel-texto">{{ nf.texto_actual }}</span>
+                {# Escalones: --nivel y --mediana con punto decimal (stringformat no usa la coma del idioma). #}
+                {% if nf.actual %}<span class="escalones" aria-hidden="true" style="--nivel: {{ nf.actual.nivel|stringformat:'s' }};{% if nf.situacion and nf.situacion.mediana_curso is not None %} --mediana: {{ nf.situacion.mediana_curso|stringformat:'g' }};{% endif %}"><span class="escalones-pasos"></span></span>{% endif %}
+              </td>
+              <td class="celda-mediana">{{ nf.situacion.texto_mediana|default:"–" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="leyenda-escalones">Cada escalón es un nivel de la rúbrica. La raya oscura marca la mediana del curso.</p>
+    </nav>
+  </div>
+</section>
+
+<section class="perfil-seccion" aria-labelledby="titulo-historial">
+  <h2 id="titulo-historial">Historial</h2>
+  <p class="ayuda">{% if historial_completo %}Todo el historial, del más reciente al más antiguo.{% else %}Últimos {{ dias_historial }} días.{% endif %}</p>
+  {% if historial %}
+    <ol class="historial">
+      {% for e in historial %}
+        <li class="evento evento-{{ e.tipo }}">
+          <time datetime="{{ e.fecha|date:'Y-m-d' }}">{{ e.fecha|date:"j M Y" }}</time>
+          {% if e.tipo == "suceso" %}
+            <p>{{ e.texto }}</p>
+            {% if e.detalle %}<p class="evento-detalle">Interpretación: {{ e.detalle }}</p>{% endif %}
+            <p class="evento-etiquetas">
+              {% if e.efecto != "sin_dato" %}<span class="efecto efecto-{{ e.efecto }}">{{ e.efecto_texto }}</span>{% endif %}
+              {% for n in e.nucleos %}{{ n.nombre }}{% if not forloop.last %} · {% endif %}{% endfor %}
+              · <a href="{% url 'captura' e.captura_id %}">Ver registro</a>
+              {% if ficha.puede_validar %} · <a href="{% url 'observacion_corregir' e.obs_id %}">Corregir</a>{% endif %}
+              {% if e.obs_id in obs_con_cambios %} · <a href="{% url 'observacion_historial' e.obs_id %}">Cambios</a>{% endif %}
+            </p>
+          {% else %}
+            <p><strong>Niveles validados</strong>{% if e.autora %} por {{ e.autora }}{% endif %}{% if e.detalle %}: {{ e.detalle }}{% endif %}</p>
+            <p class="evento-etiquetas">{% for nucleo, texto in e.niveles %}<span class="nivel-validado">{{ nucleo.nombre }}: <strong>{{ texto }}</strong></span>{% endfor %}</p>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ol>
+  {% elif historial_ocultos %}
+    <p>No hay sucesos ni niveles validados en los últimos {{ dias_historial }} días.</p>
+  {% else %}
+    <p>Todavía no hay sucesos aceptados ni niveles validados.</p>
+  {% endif %}
+  {% if historial_ocultos %}
+    <p class="historial-ver-mas">
+      <a role="button" class="secondary outline" href="?historial=todo#titulo-historial">Ver más</a>
+      <small class="ayuda">{{ historial_ocultos }} evento{{ historial_ocultos|pluralize }} anterior{{ historial_ocultos|pluralize:"es" }}</small>
+    </p>
+  {% endif %}
+</section>
+
+{% if instrumentos %}{% include "registro/_instrumentos_ficha.html" %}{% endif %}
+
+<section class="perfil-seccion" aria-labelledby="titulo-detalle">
+  <h2 id="titulo-detalle">Detalle por núcleo</h2>
+  <p class="ayuda">La rúbrica del nivel actual y del siguiente, la evolución, la evidencia por OA y las observaciones{% if ficha.puede_validar %}, y el formulario para fijar el nivel{% endif %}.</p>
+  {% for nf in ficha.nucleos %}
+    <details class="detalle-nucleo nucleo-{{ nf.nucleo.sigla }}" data-detalle="{{ nf.nucleo.sigla }}"{% if nf.form.is_bound %} open{% endif %}>
+      <summary>{% with icono=nf.nucleo.sigla|icono_nucleo %}{% if icono %}<span class="icono-nucleo" aria-hidden="true" style="-webkit-mask-image: url('{{ icono }}'); mask-image: url('{{ icono }}')"></span>{% endif %}{% endwith %}{{ nf.nucleo.nombre }} · {{ nf.texto_actual }}</summary>
+      {% include "registro/_nucleo_ficha.html" with nf=nf %}
+    </details>
+  {% endfor %}
+</section>
+{% endblock %}

@@ -1,0 +1,91 @@
+{% comment %}
+Resultado de una captura (diseno-interfaz.jpg, pantalla II): una tarjeta por niño o niña y las notas sobre el curso.
+Mientras está pendiente o procesando, HTMX pide `captura_estado` cada 2 segundos (3 en audio) y reemplaza
+este bloque. La ordena `procesar_capturas` en segundo plano: la página nunca espera a Bedrock.
+{% endcomment %}
+<div id="estado-captura" class="estado-captura">
+  {% if captura.estado == "procesada" %}
+    {% if captura.pregunta %}
+      <div class="pregunta-kimun" role="status">
+        <p><strong>Kimün necesita un dato más:</strong> {{ captura.pregunta }}</p>
+        {% if puede_registrar and puede_agregar_contexto %}
+          <form method="post" action="{% url 'captura_contexto' captura.pk %}">
+            {% csrf_token %}
+            <label for="contexto-{{ captura.pk }}" class="visualmente-oculto">Tu respuesta</label>
+            <textarea id="contexto-{{ captura.pk }}" name="contexto" rows="2" maxlength="1000" required
+                      placeholder="Por ejemplo: Maxi empujó primero y después se calmaron conversando"></textarea>
+            <button type="submit">Agregar y volver a ordenar</button>
+          </form>
+          <p class="ayuda">Se reemplazan las observaciones pendientes de esta nota por las nuevas.</p>
+        {% elif puede_registrar %}
+          <p class="ayuda">Para sumar ese dato, regístralo como una nota nueva.</p>
+        {% endif %}
+      </div>
+    {% endif %}
+    {% if tarjetas or grupales or del_curso %}
+      {% include "registro/_resumen_captura.html" %}
+      {% if del_curso %}{% include "registro/_tarjeta_curso.html" %}{% endif %}
+      {% for t in tarjetas %}{% include "registro/_tarjeta_suceso.html" with obs=t.obs oob=False %}{% endfor %}
+      {% if grupales %}
+        <section aria-labelledby="titulo-grupales-{{ captura.pk }}">
+          <h2 id="titulo-grupales-{{ captura.pk }}" class="titulo-seccion">Contexto del curso</h2>
+          <p class="ayuda">Queda como contexto del curso y no se usa para evaluar.</p>
+          {% for t in grupales %}{% include "registro/_tarjeta_suceso.html" with obs=t.obs oob=False %}{% endfor %}
+        </section>
+      {% endif %}
+    {% elif captura.tipo == "foto" and not captura.texto_extraido %}
+      <p class="aviso" role="status">No se pudo leer texto en la foto. Prueba con otra foto, con más luz y más cerca, o escribe la nota.</p>
+    {% else %}
+      <p class="aviso" role="status">No encontré sucesos de niños o niñas en este registro. Prueba contando qué hizo o dijo cada uno.</p>
+    {% endif %}
+
+  {% elif en_resguardo %}
+    {# Task 13: sin texto, sin nombres y sin calificar. El detalle está en la página del aviso. #}
+    <div class="aviso-proteccion" role="status">
+      <p><strong>Este registro quedó en resguardo.</strong> No se usará para evaluar.</p>
+      {% if aviso_visible %}
+        <p><a href="{% url 'aviso' aviso_visible.pk %}">Ver el aviso y qué hacer</a></p>
+      {% else %}
+        <p>La educadora del curso y la directora del jardín ya lo pueden ver.</p>
+      {% endif %}
+    </div>
+
+  {% elif captura.estado == "error" or atascada %}
+    {# El detalle del error queda en el log y en el panel de administración (como en views_captura.py). #}
+    <div class="aviso-error" role="alert">
+      {% if sin_conexion_ia %}
+        <p>
+          <strong>Kimün no está conectado a la IA en este servidor.</strong>
+          Faltan las credenciales de AWS para usar Bedrock, así que no se pudo separar la nota por niño ni relacionarla con sus OA.
+          Lo que registraste quedó guardado y se puede ordenar cuando la conexión esté lista.
+        </p>
+      {% else %}
+        <p>
+          <strong>{% if atascada %}El registro se demoró demasiado.{% else %}No se pudo ordenar el registro.{% endif %}</strong>
+          Lo que registraste quedó guardado; puedes volver a intentarlo.
+        </p>
+      {% endif %}
+      {% if puede_registrar %}
+        <form method="post" action="{% url 'captura_reintentar_suceso' captura.pk %}"
+              hx-post="{% url 'captura_reintentar_suceso' captura.pk %}" hx-target="#estado-captura" hx-swap="outerHTML">
+          {% csrf_token %}
+          <button type="submit">Reintentar</button>
+        </form>
+      {% endif %}
+    </div>
+
+  {% else %}
+    {# Todo lo ordena el proceso de fondo (Bedrock y Transcribe tardan más que el timeout de la página): aquí solo se vuelve a preguntar. #}
+    <div class="procesando" role="status" aria-live="polite"
+         hx-get="{% url 'captura_estado' captura.pk %}" hx-trigger="load delay:{% if captura.tipo == 'audio' %}3{% else %}2{% endif %}s" hx-target="#estado-captura" hx-swap="outerHTML">
+      {% if captura.tipo == "audio" %}
+        <p aria-busy="true">Transcribiendo el audio y ordenando el registro. Suele tardar entre 15 y 30 segundos…</p>
+      {% else %}
+        <p aria-busy="true">Ordenando el registro: separo lo que pasó con cada niño y lo relaciono con sus OA…</p>
+      {% endif %}
+    </div>
+    <noscript><p><a href="{% url 'captura' captura.pk %}">Actualizar</a></p></noscript>
+  {% endif %}
+  {% include "registro/_perfiles_mencionados.html" %}
+</div>
+{% if oob %}{% include "registro/_contador_pendientes.html" %}{% endif %}

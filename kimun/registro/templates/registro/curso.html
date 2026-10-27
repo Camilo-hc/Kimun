@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+{% load kimun %}
+{% block titulo %}{{ curso.nombre }}{% endblock %}
+{# Estilos de las tablas y las señales en registro.css (.pagina-tabla). #}
+{% block clase_pagina %}pagina-tabla{% endblock %}
+{% block contenido %}
+<header class="encabezado-pagina">
+  <h1>{{ curso.nombre }}</h1>
+  <p>{{ curso.jardin.nombre }} · {{ curso.get_nivel_educativo_display }} · {{ tabla.filas|length }} niños y niñas</p>
+  {% if puede_registrar or puede_validar or es_directora or puede_editar_lista %}
+    {# Enlaces sin atributos extra: test_revision compara el <a> exacto. El aspecto de botón sale de .botones-enlace. #}
+    <p class="acciones botones-enlace">
+      {% if puede_registrar %}<a class="principal" href="{% url 'registrar' curso.pk %}">Registrar un suceso</a>{% endif %}
+      {% if puede_validar %}
+        <a href="{% url 'revision' curso.pk %}">Revisar observaciones{% if pendientes_por_revisar %} ({{ pendientes_por_revisar }} pendiente{{ pendientes_por_revisar|pluralize }}){% endif %}</a>
+        <a href="{% url 'metas' curso.pk %}">Editar metas del curso</a>
+      {% endif %}
+      {% if puede_editar_lista %}<a href="{% url 'ninos_sala' curso.pk %}">Niños y niñas de la sala</a>{% endif %}
+      {% if es_directora %}
+        <a href="{% url 'sala_editar' curso.pk %}">Editar la sala y su equipo</a>
+        <a href="{% url 'jardin' curso.jardin.pk %}">Resumen del jardín</a>
+      {% endif %}
+    </p>
+  {% endif %}
+</header>
+
+{# --- Propuestas de nivel por decidir (solo la educadora: es quien valida) --- #}
+{% if bandeja.por_decidir or bandeja.en_preparacion %}
+  <section id="propuestas" class="bandeja-propuestas" aria-labelledby="titulo-propuestas">
+    <h2 id="titulo-propuestas">{% if bandeja.por_decidir %}<span class="bandeja-cuenta" aria-hidden="true">{{ bandeja.por_decidir|length }}</span>{% endif %}Propuestas de nivel por decidir{% if bandeja.por_decidir %} ({{ bandeja.por_decidir|length }}){% endif %}</h2>
+    {% if bandeja.por_decidir %}
+      <p class="ayuda">Kimün las preparó con las observaciones aceptadas. Son sugerencias: el nivel cambia solo si lo aceptas o fijas otro en la ficha.</p>
+      <ul class="bandeja-lista">
+        {% for item in bandeja.por_decidir %}
+          {% with p=item.propuesta %}
+            <li class="nucleo-{{ p.nucleo.sigla }}">
+              <a href="{% url 'ficha' p.nino.pk %}#nucleo-{{ p.nucleo.sigla }}">
+                <span class="avatar avatar-chico" aria-hidden="true" style="--fondo-avatar: {{ p.nino.nombre|color_avatar }}">{{ p.nino.nombre|iniciales }}</span>
+                <span class="bandeja-texto">
+                  <strong>{{ p.nino.nombre }}</strong> <span class="chip-nucleo">{{ p.nucleo.nombre }}</span>
+                  <small>
+                    {% if item.texto_propuesto %}Actual {{ item.texto_actual }} → propuesto <strong>{{ item.texto_propuesto }}</strong>
+                    {% else %}Faltan observaciones para proponer un nivel (actual {{ item.texto_actual }}){% endif %}
+                    {% if p.rubrica_provisoria %} · rúbrica provisoria{% endif %}
+                  </small>
+                </span>
+                <span class="bandeja-decidir" aria-hidden="true">Decidir</span>
+              </a>
+            </li>
+          {% endwith %}
+        {% endfor %}
+      </ul>
+    {% endif %}
+    {% if bandeja.en_preparacion %}
+      <p class="ayuda bandeja-preparando" role="status"><span class="chip-estado chip-preparando">En preparación</span> {{ bandeja.en_preparacion }} propuesta{{ bandeja.en_preparacion|pluralize }} en preparación. Aparecerá{{ bandeja.en_preparacion|pluralize:"n" }} aquí cuando esté{{ bandeja.en_preparacion|pluralize:"n" }} lista{{ bandeja.en_preparacion|pluralize }}.</p>
+    {% endif %}
+  </section>
+{% endif %}
+
+{# --- Resumen de la quincena --- #}
+<section class="tarjeta" aria-labelledby="titulo-quincena">
+  <h2 id="titulo-quincena">
+    Quincena del {{ quincena.inicio|date:"j" }} al {{ quincena.fin|date:"j \d\e F \d\e Y" }}{% if es_quincena_actual %} (actual){% endif %}
+  </h2>
+  <nav class="navegacion-quincena" aria-label="Quincenas">
+    {% if quincena_anterior %}
+      <a href="?quincena={{ quincena_anterior.inicio|date:'Y-m-d' }}">← Quincena anterior ({{ quincena_anterior.inicio|date:"j" }} al {{ quincena_anterior.fin|date:"j \d\e F" }})</a>
+    {% endif %}
+    {% if quincena_siguiente %}
+      <a href="?quincena={{ quincena_siguiente.inicio|date:'Y-m-d' }}">Quincena siguiente ({{ quincena_siguiente.inicio|date:"j" }} al {{ quincena_siguiente.fin|date:"j \d\e F" }}) →</a>
+      <a href="{{ request.path }}">Volver a la quincena actual</a>
+    {% endif %}
+  </nav>
+  {% if nucleos_sin_observaciones %}
+    <p class="aviso" role="status">
+      <strong>{{ nucleos_sin_observaciones|length }} de {{ cobertura_quincena|length }} núcleos sin observaciones en esta quincena:</strong>
+      {% for n in nucleos_sin_observaciones %}{{ n.nombre }}{% if not forloop.last %}, {% endif %}{% endfor %}.
+      Sugerencia: considerarlos al planificar las experiencias.
+    </p>
+  {% else %}
+    <p class="mensaje-ok" role="status">Todos los núcleos tienen observaciones en esta quincena.</p>
+  {% endif %}
+  <div class="overflow-auto">
+    <table>
+      <caption>Observaciones aceptadas por núcleo en la quincena</caption>
+      <thead>
+        <tr>
+          <th scope="col">Núcleo</th>
+          <th scope="col">Observaciones</th>
+          <th scope="col">Niños con al menos una</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in cobertura_quincena %}
+          <tr{% if c.sin_observaciones %} class="sin-observaciones"{% endif %}>
+            <th scope="row">{{ c.nucleo.nombre }} ({{ c.nucleo.sigla }})</th>
+            <td>{{ c.observaciones }}{% if c.sin_observaciones %} · Sin observaciones{% endif %}</td>
+            <td>{{ c.ninos }} de {{ tabla.filas|length }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{# --- Observaciones por niño (registro/frecuencia.py) --- #}
+<section class="tarjeta" aria-labelledby="titulo-frecuencia">
+  <h2 id="titulo-frecuencia">Observaciones por niño o niña</h2>
+  <details class="como-leer">
+  <summary>Cómo leer esta tabla</summary>
+  <p>
+    En los últimos {{ frecuencia.aviso.dias }} días: mediana del curso de {{ frecuencia.aviso.texto_mediana }} observaciones por niño o niña
+    (promedio {{ frecuencia.texto_promedio_semana }}). En los últimos {{ frecuencia.alerta.dias }} días: mediana de {{ frecuencia.alerta.texto_mediana }}.
+    Cuentan las aceptadas y las pendientes de revisión, sin las grupales ni las de todo el curso.
+  </p>
+  <p>
+    «Pocas observaciones» cuando un niño o niña tiene dos tercios o menos de la mediana en {{ frecuencia.aviso.dias }} días,
+    y «Muy pocas observaciones» cuando tiene un tercio o menos en {{ frecuencia.alerta.dias }} días.
+    {% if not frecuencia.aviso.compara and not frecuencia.alerta.compara %}Por ahora el curso tiene muy pocas observaciones recientes para comparar.{% endif %}
+  </p>
+  </details>
+  {% if frecuencia.con_senal %}
+    <p class="aviso" role="status"><strong>{{ frecuencia.con_senal|length }} niño{{ frecuencia.con_senal|length|pluralize }} con pocas observaciones:</strong>
+      {% for f in frecuencia.con_senal %}<a href="{% url 'ficha' f.nino.pk %}">{{ f.nino.nombre }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}.
+      Sugerencia: tenerlos presentes al observar en los próximos días.
+    </p>
+  {% endif %}
+  <div class="overflow-auto">
+    <table>
+      <caption>Observaciones de cada niño o niña en los últimos {{ frecuencia.aviso.dias }} y {{ frecuencia.alerta.dias }} días, y pendientes de revisión</caption>
+      <thead>
+        <tr>
+          <th scope="col">Niño o niña</th>
+          <th scope="col">{{ frecuencia.aviso.dias }} días</th>
+          <th scope="col">{{ frecuencia.alerta.dias }} días</th>
+          <th scope="col">Pendientes</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in frecuencia.filas %}
+          <tr>
+            <th scope="row">
+              <a href="{% url 'ficha' f.nino.pk %}">{{ f.nino.nombre }}</a>
+              {% if f.texto %}<span class="senal senal-{{ f.gravedad.value }}">{{ f.texto }}</span>{% endif %}
+              {% if puede_validar and f.texto_pendientes %}<span class="senal senal-aviso">{{ f.texto_pendientes }}</span>{% endif %}
+            </th>
+            <td>{{ f.semana }}</td>
+            <td>{{ f.dos_semanas }}</td>
+            <td>{{ f.pendientes }}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="4">Este curso todavía no tiene niños ni niñas.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{# --- Tabla del curso --- #}
+<section class="tarjeta" aria-labelledby="titulo-tabla">
+  <h2 id="titulo-tabla">Niveles por núcleo</h2>
+  <details class="como-leer">
+  <summary>Cómo leer esta tabla</summary>
+  <p>
+    Cada celda muestra el nivel actual validado. Las señales son sugerencias de revisión, no diagnósticos:
+    «Observar» cuando el niño o niña está 2 niveles bajo la referencia y «Revisar» cuando está más de 2 niveles bajo ella.
+    La referencia principal es la mediana del curso; la otra es el nivel esperado según su semestre en el curso.
+    «Sin datos» o «Datos de hace N días» indican que conviene registrar observaciones recientes (más de {{ dias_datos_recientes }} días sin observaciones aceptadas).
+    Bajo cada nombre, el nivel general es el promedio de sus núcleos: es solo una referencia, porque el nivel se decide por núcleo.
+  </p>
+  </details>
+  <div class="overflow-auto">
+    <table class="tabla-curso">
+      <caption>Nivel actual validado, comparación con el curso y nivel esperado, por núcleo</caption>
+      <thead>
+        <tr>
+          <th scope="col">Niño o niña</th>
+          {% for nucleo in tabla.nucleos %}<th scope="col"><abbr title="{{ nucleo.nombre }}">{{ nucleo.sigla }}</abbr></th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for fila in tabla.filas %}
+          <tr>
+            <th scope="row">
+              <a href="{% url 'ficha' fila.nino.pk %}">{{ fila.nino.nombre }}</a>
+              <small>
+                {% if fila.semestre %}Semestre {{ fila.semestre }}{% else %}Sin semestres configurados{% endif %}{% if fila.nivel_esperado %} · se espera {{ fila.nivel_esperado }}{% endif %}
+              </small>
+              <small class="nivel-general">Nivel general {{ fila.texto_nivel_general }} <span class="etiqueta-referencia">referencia</span></small>
+            </th>
+            {% for celda in fila.celdas %}
+              <td>
+                {{ celda.texto_nivel }}
+                {% for brecha in celda.senales %}
+                  <span class="senal senal-{{ brecha.gravedad.value }}">{{ brecha.texto }}</span>
+                {% endfor %}
+                {% if celda.texto_datos %}<span class="datos">{{ celda.texto_datos }}</span>{% endif %}
+              </td>
+            {% endfor %}
+          </tr>
+        {% empty %}
+          <tr><td colspan="{{ tabla.nucleos|length|add:1 }}">Este curso todavía no tiene niños ni niñas.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{# --- Distribución del curso --- #}
+<section class="tarjeta" aria-labelledby="titulo-distribucion">
+  <h2 id="titulo-distribucion">Distribución del curso</h2>
+  <p class="ayuda">Cuántos niños y niñas hay en cada nivel de la rúbrica ({{ tabla.nivel_maximo }} niveles), por núcleo. El nivel con más niños va subrayado.</p>
+  <div class="overflow-auto">
+    <table class="distribucion">
+      <caption>Niños y niñas por nivel en cada núcleo</caption>
+      <thead>
+        <tr>
+          <th scope="col">Núcleo</th>
+          {% for nivel in tabla.niveles %}<th scope="col">Nivel {{ nivel }}</th>{% endfor %}
+          <th scope="col">Mayoría en</th>
+          <th scope="col">Mediana</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in tabla.distribuciones %}
+          <tr>
+            <th scope="row"><abbr title="{{ d.nucleo.nombre }}">{{ d.nucleo.sigla }}</abbr></th>
+            {% for nivel, cantidad in d.conteos %}
+              <td{% if nivel in d.mas_frecuentes %} class="mayoria"{% endif %}>{{ cantidad }}</td>
+            {% endfor %}
+            <td>{{ d.texto_mas_frecuentes }}</td>
+            <td>{{ d.texto_mediana }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

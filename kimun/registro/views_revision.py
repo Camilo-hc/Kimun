@@ -1,0 +1,253 @@
+"""Pantalla de revisión (PLAN.md, Task 6).
+
+Solo la educadora del curso revisa. Una asistente, la directora o una
+educadora de otro curso reciben 404, igual que con un curso que no existe.
+
+Cada acción funciona con HTMX (devuelve el fragmento que reemplaza a la
+observación) y también sin JavaScript (redirige a la pantalla de revisión).
+"""
+from django.contrib import messages
+from django.contrib.auth.decorators import login_required
+from django.core.exceptions import ValidationError
+from django.db import transaction
+from django.http import HttpResponse
+from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
+from django.views.decorators.http import require_GET, require_http_methods, require_POST
+
+from django.utils import timezone
+
+from .models import Captura, Observacion
+from .pantallas import observaciones_para_tarjetas, tarjetas_suceso
+from .permisos import cursos_que_valida
+from .revision import (
+    MENSAJE_YA_NO_PENDIENTE,
+    AsignarNinoForm,
+    ObservacionForm,
+    aceptar,
+    aceptar_todas,
+    asignar_nino,
+    bloquear_pendiente,
+    descartar,
+    pendientes_que_revisa,
+    refrescar,
+    resumen_pendientes,
+    revision_del_curso,
+)
+
+
+def _es_htmx(request):
+    return request.headers.get("HX-Request") == "true"
+
+
+# Las mismas acciones sirven en la página de la captura (pantalla II de diseno-interfaz.jpg):
+# con `vista=suceso` responden con la tarjeta del suceso y vuelven a esa página.
+VISTA_SUCESO = "suceso"
+
+
+def _vista(request):
+    vista = request.POST.get("vista") or request.GET.get("vista")
+    return VISTA_SUCESO if vista == VISTA_SUCESO else ""
+
+
+def _observacion(request, obs_id):
+    """La observación pendiente, si el usuario revisa su curso; si no, 404."""
+    return get_object_or_404(
+        pendientes_que_revisa(request.user).select_related("captura__curso", "captura__autora", "nino"),
+        pk=obs_id,
+    )
+
+
+def _url_revision(curso, obs=None, vista=""):
+    if vista == VISTA_SUCESO and obs is not None:
+        return f"{reverse('captura', args=[obs.captura_id])}#obs-{obs.pk}"
+    url = reverse("revision", args=[curso.pk])
+    return f"{url}#obs-{obs.pk}" if obs else url
+
+
+def _contexto_revision(curso):
+    return {
+        "curso": curso,
+        "revision": revision_del_curso(curso),
+        "resumen": resumen_pendientes(curso),
+        "ninos": list(curso.ninos.all()),
+    }
+
+
+def _tarjeta(request, obs, *, resuelta="", error=""):
+    """Fragmento de una observación, con el resumen de pendientes fuera de banda."""
+    curso = obs.captura.curso
+    if _vista(request) == VISTA_SUCESO:
+        fresca = observaciones_para_tarjetas(type(obs).objects.filter(pk=obs.pk)).get()
+        return render(request, "registro/_tarjeta_suceso.html", {
+            "obs": fresca,
+            "t": tarjetas_suceso([fresca], timezone.localdate())[0],
+            "curso": curso,
+            "ninos": list(curso.ninos.all()),
+            "resuelta": resuelta,
+            "error": error,
+            "puede_validar": True,
+            "vista": VISTA_SUCESO,
+            "oob": True,
+        })
+    return render(request, "registro/_tarjeta_revision.html", {
+        "obs": obs,
+        "curso": curso,
+        "ninos": list(curso.ninos.all()),
+        "resuelta": resuelta,
+        "error": error,
+        "resumen": resumen_pendientes(curso),
+        "oob": True,
+    })
+
+
+def _ya_revisada(request, obs):
+    """La observación dejó de estar pendiente mientras se miraba: no se cambia y se muestra cómo quedó.
+
+    Pasa si se aceptó o descartó en otra pantalla, o si sumar contexto a la nota la borró.
+    """
+    curso = obs.captura.curso
+    vista = _vista(request)
+    if not refrescar(obs):
+        messages.error(request, "Esta observación ya no existe: la nota se volvió a ordenar.")
+        if _es_htmx(request):
+            respuesta = HttpResponse(status=200)
+            respuesta["HX-Refresh"] = "true"
+            return respuesta
+        return redirect(_url_revision(curso, vista=vista) if vista != VISTA_SUCESO
+                        else reverse("captura", args=[obs.captura_id]))
+    if _es_htmx(request):
+        resuelta = obs.estado if obs.estado in (Observacion.Estado.ACEPTADA, Observacion.Estado.DESCARTADA) else ""
+        return _tarjeta(request, obs, resuelta=resuelta, error=MENSAJE_YA_NO_PENDIENTE)
+    messages.error(request, MENSAJE_YA_NO_PENDIENTE)
+    return redirect(_url_revision(curso, obs, vista))
+
+
+@login_required
+@require_GET
+def revision(request, curso_id):
+    curso = get_object_or_404(cursos_que_valida(request.user).select_related("jardin"), pk=curso_id)
+    return render(request, "registro/revision.html", _contexto_revision(curso))
+
+
+@login_required
+@require_GET
+def observacion(request, obs_id):
+    """La observación sin formulario de edición (para "Cancelar")."""
+    obs = _observacion(request, obs_id)
+    if not _es_htmx(request):
+        return redirect(_url_revision(obs.captura.curso, obs, _vista(request)))
+    return _tarjeta(request, obs)
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def editar(request, obs_id):
+    obs = _observacion(request, obs_id)
+    curso = obs.captura.curso
+    vista = _vista(request)
+    # Un POST vacío también se valida (con `request.POST or None` quedaba sin errores).
+    datos = request.POST if request.method == "POST" else None
+    form = ObservacionForm(datos, instance=obs, curso=curso, prefix=f"obs{obs.pk}")
+    if request.method == "POST" and form.is_valid():
+        # Se guarda solo si sigue pendiente, con el bloqueo tomado: si se aceptó mientras se
+        # editaba, la edición no pisa la observación aceptada (que se corrige con historial).
+        with transaction.atomic():
+            editable = bloquear_pendiente(obs)
+            if editable:
+                obs = form.save()
+        if not editable:
+            return _ya_revisada(request, obs)
+        if _es_htmx(request):
+            return _tarjeta(request, obs)
+        messages.success(request, "Se guardaron los cambios de la observación.")
+        return redirect(_url_revision(curso, obs, vista))
+    if _es_htmx(request):
+        # 200 aunque haya errores: HTMX no reemplaza el fragmento ante un 4xx y no se verían.
+        return render(request, "registro/_form_observacion.html", {"obs": obs, "curso": curso, "form": form, "vista": vista})
+    return render(request, "registro/revision_editar.html", {"obs": obs, "curso": curso, "form": form, "vista": vista},
+                  status=400 if form.errors else 200)
+
+
+@login_required
+@require_POST
+def asignar(request, obs_id):
+    """Elige o cambia el niño de una observación pendiente."""
+    obs = _observacion(request, obs_id)
+    curso = obs.captura.curso
+    form = AsignarNinoForm(request.POST, curso=curso)
+    error = ""
+    if form.is_valid():
+        if not asignar_nino(obs, form.cleaned_data["nino"]):
+            return _ya_revisada(request, obs)
+    else:
+        error = "Elige un niño o niña de la lista."
+    if _es_htmx(request):
+        return _tarjeta(request, obs, error=error)
+    if error:
+        messages.error(request, error)
+    else:
+        messages.success(request, f"Observación asignada a {obs.nino}.")
+    return redirect(_url_revision(curso, obs, _vista(request)))
+
+
+@login_required
+@require_POST
+def aceptar_observacion(request, obs_id):
+    obs = _observacion(request, obs_id)
+    curso = obs.captura.curso
+    try:
+        aceptada = aceptar(obs)
+    except ValidationError as e:
+        if _es_htmx(request):
+            return _tarjeta(request, obs, error=e.messages[0])
+        messages.error(request, e.messages[0])
+        return redirect(_url_revision(curso, obs, _vista(request)))
+    if not aceptada:
+        return _ya_revisada(request, obs)
+    if _es_htmx(request):
+        return _tarjeta(request, obs, resuelta="aceptada")
+    messages.success(request, "Observación aceptada.")
+    vista = _vista(request)
+    return redirect(_url_revision(curso, obs if vista else None, vista))
+
+
+@login_required
+@require_POST
+def descartar_observacion(request, obs_id):
+    obs = _observacion(request, obs_id)
+    if not descartar(obs):
+        return _ya_revisada(request, obs)
+    if _es_htmx(request):
+        return _tarjeta(request, obs, resuelta="descartada")
+    messages.success(request, "Observación descartada.")
+    vista = _vista(request)
+    return redirect(_url_revision(obs.captura.curso, obs if vista else None, vista))
+
+
+@login_required
+@require_POST
+def aceptar_todas_captura(request, captura_id):
+    # Una captura en resguardo (posible vulneración) no se revisa: 404, como si no existiera.
+    captura = get_object_or_404(Captura.objects.filter(curso__in=cursos_que_valida(request.user)).exclude(
+        estado=Captura.Estado.EN_RESGUARDO), pk=captura_id)
+    # La tarjeta "Todo el curso" acepta solo esas observaciones; la revisión, todas las de la captura.
+    resultado = aceptar_todas(captura, solo_del_curso=request.POST.get("alcance") == "curso")
+    aceptadas, sin_nino = resultado
+    texto = "Se aceptó 1 observación." if aceptadas == 1 else f"Se aceptaron {aceptadas} observaciones."
+    if sin_nino == 1:
+        texto += " 1 queda pendiente porque no tiene niño o niña asignado."
+    elif sin_nino:
+        texto += f" {sin_nino} quedan pendientes porque no tienen niño o niña asignado."
+    if resultado.de_otro_curso == 1:
+        texto += " 1 queda pendiente porque el niño o niña ya está en otro curso."
+    elif resultado.de_otro_curso:
+        texto += f" {resultado.de_otro_curso} quedan pendientes porque el niño o niña ya está en otro curso."
+    messages.success(request, texto)
+    if _es_htmx(request):
+        # Se vuelve a dibujar toda la revisión: la captura puede tener notas en la sección de contexto.
+        contexto = _contexto_revision(captura.curso) | {"parcial": True}
+        return render(request, "registro/_revision_contenido.html", contexto)
+    if _vista(request) == VISTA_SUCESO:
+        return redirect("captura", captura_id=captura.pk)
+    return redirect(_url_revision(captura.curso))

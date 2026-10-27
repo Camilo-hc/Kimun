@@ -1,0 +1,151 @@
+{% load static kimun %}
+{% comment %}
+Menú lateral (diseno-interfaz.jpg, pantalla III). Lo dibuja la etiqueta {% menu_lateral %} de base.html.
+Es un <dialog>: kimun.js lo abre con el botón del menú; Esc, el botón "Cerrar" o un toque fuera lo cierran.
+{% endcomment %}
+<dialog id="menu-lateral" class="menu-lateral" aria-labelledby="menu-lateral-titulo">
+  <article>
+    <header class="menu-cabecera">
+      <img src="{% static 'registro/img/logo.svg' %}" alt="" width="52" height="52">
+      <div>
+        {% if curso %}
+          {# La sala va en el selector de abajo; aquí, el jardín. #}
+          <p id="menu-lateral-titulo" class="menu-curso"><strong>{{ curso.jardin.nombre }}</strong></p>
+          <p class="menu-jardin">Kimün</p>
+        {% else %}
+          <p id="menu-lateral-titulo" class="menu-curso"><strong>Kimün</strong></p>
+        {% endif %}
+      </div>
+      <button type="button" class="boton-icono secondary outline" data-cerrar-menu>
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="visualmente-oculto">Cerrar el menú</span>
+      </button>
+    </header>
+
+    {% if curso %}
+      {# Selector de sala: un bloque con la sala actual; al tocarlo se despliegan las salas disponibles. #}
+      {# <details> funciona sin JavaScript y con teclado. Con una sola sala, el bloque solo la muestra. #}
+      {% if salas|length > 1 %}
+        <details class="selector-sala">
+          <summary>
+            <span class="selector-sala-texto">
+              <small>Sala</small>
+              <strong>{{ curso.nombre }}</strong>
+            </span>
+            <span class="selector-sala-accion">Cambiar</span>
+          </summary>
+          <nav aria-label="Cambiar de sala">
+            <ul class="selector-sala-lista">
+              {% for s in salas %}
+                {% ifchanged s.curso.jardin_id %}{% if jardines|length > 1 or s.curso.jardin_id != curso.jardin_id %}<li class="selector-sala-jardin">{{ s.curso.jardin.nombre }}</li>{% endif %}{% endifchanged %}
+                <li>
+                  <a href="{{ s.url }}"{% if s.actual %} aria-current="page" class="actual"{% endif %}>
+                    <span>{{ s.curso.nombre }}</span>
+                    <small>{{ s.curso.get_nivel_educativo_display }}{% if s.actual %} · actual{% endif %}</small>
+                  </a>
+                </li>
+              {% endfor %}
+            </ul>
+          </nav>
+        </details>
+      {% else %}
+        <div class="selector-sala selector-sala-unica">
+          <span class="selector-sala-texto"><small>Sala</small><strong>{{ curso.nombre }}</strong></span>
+        </div>
+      {% endif %}
+    {% endif %}
+
+    {% if curso %}
+      <nav aria-label="Secciones del curso">
+        <ul class="menu-secciones">
+          {% if puede_registrar %}<li><a href="{% url 'registrar' curso.pk %}">Registrar un suceso</a></li>{% endif %}
+          <li><a href="{% url 'curso' curso.pk %}">Tabla del curso</a></li>
+          {% if puede_validar %}
+            <li><a href="{% url 'revision' curso.pk %}">Revisar observaciones{% for c in cursos_por_revisar %}{% if c.pk == curso.pk and c.pendientes %} ({{ c.pendientes }}){% endif %}{% endfor %}</a></li>
+            {% if propuestas_por_decidir %}<li><a href="{% url 'curso' curso.pk %}#propuestas">Propuestas de nivel por decidir ({{ propuestas_por_decidir }})</a></li>{% endif %}
+            <li><a href="{% url 'metas' curso.pk %}">Metas del curso</a></li>
+          {% endif %}
+          {% if puede_editar_lista %}<li><a href="{% url 'ninos_sala' curso.pk %}">Niños y niñas de la sala</a></li>{% endif %}
+          {% for j in jardines %}<li><a href="{% url 'jardin' j.pk %}">Salas de {{ j.nombre }}</a></li>{% endfor %}
+        </ul>
+      </nav>
+
+      {% if presentes %}
+        <section class="menu-seccion" aria-labelledby="titulo-presentes">
+          <h2 id="titulo-presentes">Para tener presentes</h2>
+          <p class="menu-ayuda">Con más señales de revisión en la tabla del curso o con pocas observaciones frente al resto. Son sugerencias, no diagnósticos.
+            Núcleos <strong class="senal-icono-alerta">en rojo, para revisar</strong>; <strong class="senal-icono-aviso">en naranjo, para observar</strong>.</p>
+          <ul class="lista-ninos">
+            {% for p in presentes %}
+              <li>
+                <a href="{% url 'ficha' p.nino.pk %}">
+                  <span class="avatar avatar-chico" aria-hidden="true" style="--fondo-avatar: {{ p.nino.nombre|color_avatar }}">{{ p.nino.nombre|iniciales }}</span>
+                  <span>
+                    {{ p.nino.nombre }}
+                    {# Solo el icono de cada núcleo, en rojo (revisar) o naranjo (observar); el texto queda para lectores de pantalla y al pasar el puntero. #}
+                    <span class="senales-menu">
+                      {% for n in p.revisar %}{% include "registro/_icono_senal.html" with nucleo=n tipo="alerta" accion="Revisar" %}{% endfor %}
+                      {% for n in p.observar %}{% include "registro/_icono_senal.html" with nucleo=n tipo="aviso" accion="Observar" %}{% endfor %}
+                    </span>
+                    {# Frecuencia de observación (registro/frecuencia.py): texto, porque no es de un núcleo. #}
+                    {% if p.pocas_observaciones %}<span class="senal-texto-menu senal-menu-{{ p.frecuencia.gravedad.value }}" title="{{ p.frecuencia.texto }}">{{ p.frecuencia.texto_corto }}</span>{% endif %}
+                    {% if p.muchas_pendientes %}<span class="senal-texto-menu senal-menu-aviso">{{ p.frecuencia.texto_pendientes }}</span>{% endif %}
+                  </span>
+                </a>
+              </li>
+            {% endfor %}
+          </ul>
+        </section>
+      {% endif %}
+
+      <section class="menu-seccion" aria-labelledby="titulo-ninos">
+        <h2 id="titulo-ninos">Niños y niñas ({{ ninos|length }})</h2>
+        <label for="buscar-nino" class="visualmente-oculto">Buscar un niño o niña</label>
+        <input type="search" id="buscar-nino" placeholder="Buscar por nombre" autocomplete="off"
+               aria-controls="lista-ninos" aria-describedby="resultado-busqueda" data-buscador>
+        <p id="resultado-busqueda" class="visualmente-oculto" aria-live="polite" data-resultado-busqueda></p>
+        <ul id="lista-ninos" class="lista-ninos" data-lista-ninos>
+          {% for nino in ninos %}
+            <li data-nombre="{{ nino.nombre }} {{ nino.alias|join:' ' }}">
+              <a href="{% url 'ficha' nino.pk %}">
+                <span class="avatar avatar-chico" aria-hidden="true" style="--fondo-avatar: {{ nino.nombre|color_avatar }}">{{ nino.nombre|iniciales }}</span>
+                <span>{{ nino.nombre }}</span>
+              </a>
+            </li>
+          {% empty %}
+            <li>Este curso todavía no tiene niños ni niñas.</li>
+          {% endfor %}
+        </ul>
+        <p class="menu-ayuda" data-sin-resultados hidden>No hay niños ni niñas con ese nombre.</p>
+      </section>
+    {% elif cursos or jardines %}
+      {% if jardines %}
+        <nav aria-label="Jardines">
+          <ul class="menu-secciones">
+            {% for j in jardines %}<li><a href="{% url 'jardin' j.pk %}">Salas de {{ j.nombre }}</a></li>{% endfor %}
+          </ul>
+        </nav>
+      {% endif %}
+      {% if cursos %}
+        {# Mismo formato que el selector de sala: nombre y nivel educativo, agrupadas por jardín si son de varios. #}
+        <nav class="menu-seccion" aria-labelledby="titulo-mis-salas">
+          <h2 id="titulo-mis-salas">Salas</h2>
+          <ul class="selector-sala-lista">
+            {% for c in cursos %}
+              {% if varios_jardines %}{% ifchanged c.jardin_id %}<li class="selector-sala-jardin">{{ c.jardin.nombre }}</li>{% endifchanged %}{% endif %}
+              <li><a href="{% url 'curso' c.pk %}"><span>{{ c.nombre }}</span><small>{{ c.get_nivel_educativo_display }}</small></a></li>
+            {% endfor %}
+          </ul>
+        </nav>
+      {% endif %}
+    {% endif %}
+
+    <footer class="menu-pie">
+      <p>{{ user.get_full_name|default:user.username }}</p>
+      <form method="post" action="{% url 'logout' %}">
+        {% csrf_token %}
+        <button type="submit" class="secondary outline">Cerrar sesión</button>
+      </form>
+    </footer>
+  </article>
+</dialog>

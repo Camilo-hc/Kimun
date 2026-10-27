@@ -1,0 +1,89 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest-tmp/
+
+# Django
+db.sqlite3
+db.sqlite3-journal
+*.sqlite3
+*.sqlite
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite3-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+# Respaldos de bases (incluidas las copias comprimidas del despliegue)
+*.sqlite3.*
+*.sqlite.*
+*.db.bak
+*.db.backup
+*.db.gz
+*.db.zip
+*.sql.gz
+*.sql.zip
+backups/
+respaldos/
+media/
+staticfiles/
+
+# Documentos fuente (se descargan desde su origen, no se versionan)
+contexto/*.pdf
+# FAQ de Integra de los tres retos (resumido en PLAN.md, "FAQ de Integra")
+contexto/faq_integra.json
+
+# Fotos de los post-its de prueba (Task 8): se toman en el momento, no se versionan
+datos/eval/fotos/
+
+# Secretos y configuración local
+.env
+.env.*
+!.env.example
+.aws/
+.ssh/
+credentials
+credentials.json
+service-account*.json
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+id_ecdsa
+
+# Logs, temporales y resultados locales de pruebas
+*.log
+logs/
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+tmp/
+temp/
+test-results/
+junit*.xml
+
+# Editores y sistema
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

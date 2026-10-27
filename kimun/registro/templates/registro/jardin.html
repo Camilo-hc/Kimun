@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block titulo %}{{ jardin.nombre }}{% endblock %}
+{# Estilos de la tabla y las señales en registro.css (.pagina-tabla). #}
+{% block clase_pagina %}pagina-tabla{% endblock %}
+{% block contenido %}
+<header class="encabezado-pagina">
+  <h1>{{ jardin.nombre }}</h1>
+  <p>Resumen para la directora</p>
+  <p class="acciones"><a role="button" class="secondary outline" href="{% url 'protocolo_jardin' jardin.pk %}">Protocolo de protección de derechos{% if not jardin.protocolo_proteccion %} (por cargar){% endif %}</a></p>
+</header>
+
+{# --- Alertas: lo primero que ve la directora (docs/diseno.md, «Vista del jardín») --- #}
+<section class="tarjeta{% if resumen.alertas %} tarjeta-alertas{% endif %}" aria-labelledby="titulo-alertas">
+  <h2 id="titulo-alertas">{% if resumen.alertas %}<span class="cuenta-alertas" aria-hidden="true">{{ resumen.alertas|length }}</span>{% endif %}Sugerencias de revisión</h2>
+  {% if resumen.alertas %}
+    <ul class="lista-sugerencias">
+      {% for alerta in resumen.alertas %}
+        <li>
+          <svg class="sugerencia-icono" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path d="M12 3.5 2.5 20h19z" fill="currentColor"/><path d="M12 10v4.5M12 17.2v.3" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></svg>
+          <span class="senal senal-alerta">{{ alerta.texto_alerta }}</span>
+          <a href="{% url 'curso' alerta.curso.pk %}">Ver {{ alerta.curso.nombre }}</a>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="mensaje-ok" role="status">Ninguna sala está {{ resumen.texto_umbral }} o más bajo las demás salas de su nivel educativo.</p>
+  {% endif %}
+</section>
+
+{% include "registro/_salas_jardin.html" %}
+
+{# --- Tabla por nivel educativo --- #}
+<section class="tarjeta" aria-labelledby="titulo-salas">
+  <h2 id="titulo-salas">Promedio de cada sala por núcleo</h2>
+  <details class="como-leer">
+  <summary>Cómo leer esta tabla</summary>
+  <p>
+    Cada celda es el promedio del nivel actual validado por la educadora de los niños y niñas de la sala, redondeado a un decimal.
+    Cada sala se compara solo con las otras salas de su mismo nivel educativo, usando estos mismos promedios redondeados.
+    «Revisar» aparece cuando una sala queda {{ resumen.texto_umbral }} o más bajo el promedio de las demás:
+    es una sugerencia de revisión, no un diagnóstico.
+  </p>
+  <p>
+    Una sala entra en la comparación de un núcleo si al menos {{ resumen.texto_minimo }} de sus niños y niñas tiene nivel validado en él.
+    Si no, la celda dice «Sin datos suficientes» y esa sala no cuenta en el promedio de las demás.
+  </p>
+  </details>
+  {% for grupo in resumen.grupos %}
+    <h3>{{ grupo.nombre }}</h3>
+    {% if not grupo.comparable %}
+      <p class="ayuda">Con una sola sala de este nivel educativo no hay con quién comparar.</p>
+    {% endif %}
+    <div class="overflow-auto">
+      <table class="tabla-jardin">
+        <caption>Promedio del nivel actual validado por núcleo, salas de {{ grupo.nombre }}</caption>
+        <thead>
+          <tr>
+            <th scope="col">Núcleo</th>
+            {% for c in grupo.cursos %}
+              <th scope="col">
+                <a href="{% url 'curso' c.pk %}">{{ c.nombre }}</a>
+                <small>{{ c.cantidad_ninos }} niño{{ c.cantidad_ninos|pluralize }}</small>
+                <small><a href="{% url 'capturar' c.pk %}" aria-label="Registrar una nota en {{ c.nombre }}">Registrar una nota</a></small>
+              </th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for fila in grupo.filas %}
+            <tr>
+              <th scope="row">{{ fila.nucleo.nombre }}</th>
+              {% for celda in fila.celdas %}
+                <td{% if celda.alerta %} class="celda-alerta"{% elif not celda.suficiente %} class="celda-sin-datos"{% endif %}>
+                  {{ celda.texto_promedio }}
+                  {% if celda.alerta %}<span class="senal senal-alerta">{{ celda.texto_celda }}</span>{% endif %}
+                </td>
+              {% endfor %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% empty %}
+    <p>Este jardín todavía no tiene salas.</p>
+  {% endfor %}
+</section>
+{% endblock %}
